@@ -25,7 +25,7 @@ export default function TabLayout() {
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="mic" color={color} size={size} />
           ),
-          headerTitle: 'Counselor',
+          headerTitle: 'LegalPilot AI',
         }}
       />
       <Tabs.Screen

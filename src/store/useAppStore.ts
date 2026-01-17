@@ -2,6 +2,7 @@
 import { create } from 'zustand';
 import { AppState, Case, Recording, QueuedRecording } from '../types';
 import { v4 as uuidv4 } from 'uuid';
+import { storageService } from '../services/storageService';
 
 export const useAppStore = create<AppState>((set, get) => ({
   cases: [],
@@ -125,6 +126,18 @@ export const useAppStore = create<AppState>((set, get) => ({
       cases: state.cases.filter((c) => c.id !== caseId),
       currentCase:
         state.currentCase?.id === caseId ? null : state.currentCase,
+    }));
+  },
+
+  updateCase: (caseId: string, updates: Partial<Case>) => {
+    set((state) => ({
+      cases: state.cases.map((c) =>
+        c.id === caseId ? { ...c, ...updates } : c
+      ),
+      currentCase:
+        state.currentCase?.id === caseId
+          ? { ...state.currentCase, ...updates }
+          : state.currentCase,
     }));
   },
 
