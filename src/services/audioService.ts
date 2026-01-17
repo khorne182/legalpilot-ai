@@ -75,10 +75,8 @@ class AudioService {
     }
 
     try {
-      await this.recording.stopAndUnloadAsync();
-
+      const status = await this.recording.stopAndUnloadAsync();
       const uri = this.recording.getURI();
-      const status = await this.recording.getStatusAsync();
 
       if (!uri) {
         throw new Error('Failed to get recording URI');
@@ -88,7 +86,7 @@ class AudioService {
 
       return {
         uri,
-        duration: status.isRecording && status.durationMillis ? status.durationMillis / 1000 : 0,
+        duration: status.durationMillis / 1000,
         id: uuidv4(),
       };
     } catch (error) {

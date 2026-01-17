@@ -1,5 +1,5 @@
 // app/(tabs)/index.tsx
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -12,17 +12,22 @@ import {
   Modal,
   FlatList,
   TextInput,
+  useColorScheme,
+  StatusBar,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAppStore } from '@/store/useAppStore';
 import { audioService } from '@/services/audioService';
-import { transcriptionService } from '@/services/transcriptionService';
-import { legalEngineService } from '@/services/legalEngineService';
+import { apiService } from '@/services/apiService';
 import { storageService } from '@/services/storageService';
 import { Recording, LegalAnalysis } from '@/types';
-import { v4 as uuidv4 } from 'uuid';
+import { Colors, Layout } from '@/theme';
 
 export default function HomeScreen() {
+  const colorScheme = useColorScheme();
+  const theme = colorScheme === 'dark' ? 'dark' : 'light';
+  const colors = Colors; // Access colors directly
+
   const [recordingTime, setRecordingTime] = useState(0);
   const [isProcessing, setIsProcessing] = useState(false);
   const [lastAnalysis, setLastAnalysis] = useState<LegalAnalysis | null>(null);
@@ -40,12 +45,12 @@ export default function HomeScreen() {
   const isOnline = useAppStore((state) => state.isOnline);
   const setIsRecording = useAppStore((state) => state.setIsRecording);
   const currentCase = useAppStore((state) => state.currentCase);
+  const setCurrentCase = useAppStore((state) => state.setCurrentCase);
   const cases = useAppStore((state) => state.cases);
   const addRecording = useAppStore((state) => state.addRecording);
-  const setCurrentCase = useAppStore((state) => state.setCurrentCase);
   const addToQueue = useAppStore((state) => state.addToQueue);
 
-  // Format date/time for default recording name (e.g., "Fri, Jan 17 · 6:45 PM")
+  // Format date/time
   const formatDateTime = (date: Date) => {
     const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
     const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -56,15 +61,13 @@ export default function HomeScreen() {
     const mins = String(date.getMinutes()).padStart(2, '0');
     const ampm = hours >= 12 ? 'PM' : 'AM';
     hours = hours % 12;
-    hours = hours ? hours : 12; // 0 should be 12
+    hours = hours ? hours : 12; 
     return `${day}, ${month} ${dateNum} · ${hours}:${mins} ${ampm}`;
   };
 
-  // Initialize app on mount
   useEffect(() => {
     const initializeApp = async () => {
       try {
-        // Request audio permissions immediately
         const { audioService } = await import('@/services/audioService');
         await audioService.requestPermissions();
 
@@ -72,10 +75,8 @@ export default function HomeScreen() {
         const store = useAppStore.getState();
         
         if (casesData.length === 0) {
-          // Create a default case if none exist
           store.createCase('Default Case');
         } else if (!store.currentCase) {
-          // Set first case as current if none selected
           store.setCurrentCase(casesData[0].id);
         }
         
@@ -83,21 +84,18 @@ export default function HomeScreen() {
       } catch (error) {
         console.error('Failed to initialize app:', error);
         Alert.alert('Permission Error', 'Microphone permission is required to record');
-        setIsInitialized(true); // Continue anyway
+        setIsInitialized(true);
       }
     };
-
     initializeApp();
   }, []);
 
-  // Timer effect
   useEffect(() => {
     let interval: NodeJS.Timeout;
     if (isRecording) {
       interval = setInterval(() => {
         setRecordingTime((prev) => {
-          if (prev >= 30) {
-            // Auto-stop at 30 seconds
+          if (prev >= 60) {
             handleStopRecording();
             return 0;
           }
@@ -109,23 +107,16 @@ export default function HomeScreen() {
   }, [isRecording]);
 
   const handleStartRecording = async () => {
-    console.log('Start recording clicked');
-    console.log('Current case:', currentCase);
-    console.log('Is recording:', isRecording);
-    
     if (!currentCase) {
       Alert.alert('No Case Selected', 'Please select or create a case first.');
       return;
     }
-
     try {
-      console.log('Starting recording...');
       setRecordingTime(0);
       setIsRecording(true);
       setLastAnalysis(null);
       setLastTranscript('');
       await audioService.startRecording();
-      console.log('Recording started successfully');
     } catch (error) {
       console.error('Recording error:', error);
       Alert.alert('Error', 'Failed to start recording');
@@ -136,357 +127,303 @@ export default function HomeScreen() {
   const handleStopRecording = async () => {
     setIsRecording(false);
     setIsProcessing(true);
-
     try {
-      // Stop recording and get audio file
       const recordingResult = await audioService.stopRecording();
       const timestamp = new Date();
-
-      // Create recording object
       const recording: Recording = {
         id: recordingResult.id,
         caseId: currentCase!.id,
         audioUri: recordingResult.uri,
         duration: recordingResult.duration,
         timestamp: timestamp,
-        name: '', // Will be set by the name modal
-        rawTranscript: '', // Will be set by Whisper transcription
+        name: '',
+        rawTranscript: '',
         analysis: null,
         syncStatus: 'pending',
       };
-
-      // Set default name and show modal
       const defaultNameStr = formatDateTime(timestamp);
       setDefaultName(defaultNameStr);
       setRecordingName(defaultNameStr);
       setPendingRecording(recording);
       setIsProcessing(false);
       setNameModalVisible(true);
-
     } catch (error) {
       Alert.alert('Error', 'Failed to stop recording');
-      console.error(error);
       setIsProcessing(false);
     }
   };
 
   const handleSaveRecordingName = async () => {
     if (!pendingRecording) return;
-    
     setNameModalVisible(false);
     setIsProcessing(true);
-
     try {
-      // Use the recording name (or default if empty)
       const finalName = recordingName.trim() || defaultName;
       const recording = { ...pendingRecording, name: finalName };
-
-      // Save to local storage immediately
       await storageService.saveRecording(recording);
 
-      // If online, try to transcribe and analyze
       if (isOnline) {
-        // Try to transcribe audio
         try {
-          const transcript = await transcriptionService.transcribeAudio(
-            recording.audioUri
-          );
-          // Store the transcript in rawTranscript field
+          const { transcript, analysis } = await apiService.analyzeAudio(recording.audioUri);
           recording.rawTranscript = transcript;
-          setLastTranscript(transcript);
-
-          // Try to analyze with legal engine
-          try {
-            const analysis = await legalEngineService.analyzeTranscript(transcript);
-            recording.analysis = analysis;
-            recording.syncStatus = 'synced';
-            setLastAnalysis(analysis);
-          } catch (error) {
-            console.warn('Legal analysis unavailable:', error);
-            recording.syncStatus = 'synced'; // Mark as synced even without analysis
-            setLastAnalysis(null);
-          }
-        } catch (error) {
-          console.warn('Transcription unavailable:', error);
+          recording.analysis = analysis;
           recording.syncStatus = 'synced';
+          setLastTranscript(transcript);
+          setLastAnalysis(analysis);
+        } catch (error) {
+          console.warn('Backend analysis unavailable:', error);
+          recording.syncStatus = 'failed';
         }
       } else {
-        // Offline mode: queue for later processing
         addToQueue(recording);
-        Alert.alert(
-          'Recording Saved',
-          'You are offline. This will be processed when you reconnect.'
-        );
+        Alert.alert('Recording Saved', 'Offline mode: Queued for processing.');
       }
 
-      // Update recording in storage and state
       await storageService.updateRecording(recording.id, {
         rawTranscript: recording.rawTranscript,
         analysis: recording.analysis,
         syncStatus: recording.syncStatus,
       });
-
       addRecording(recording);
-
-      // Reset state
       setPendingRecording(null);
       setRecordingName('');
       setDefaultName('');
     } catch (error) {
       Alert.alert('Error', 'Failed to save recording');
-      console.error(error);
     } finally {
       setIsProcessing(false);
     }
   };
 
   const handleCancelRecording = () => {
-    // User cancelled - discard the recording
     setNameModalVisible(false);
     setPendingRecording(null);
     setRecordingName('');
     setDefaultName('');
-    Alert.alert('Recording Discarded', 'The recording was not saved.');
   };
 
   const formatTime = (seconds: number) => {
     return `${seconds.toString().padStart(2, '0')}s`;
   };
 
-  if (!isInitialized) {
-    return (
-      <SafeAreaView style={styles.container}>
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color="#007AFF" />
-          <Text style={styles.loadingText}>Initializing...</Text>
-        </View>
-      </SafeAreaView>
-    );
-  }
+  if (!isInitialized) return null;
+
+  // Render Logic
+  const boxColor = theme === 'dark' ? colors.surface.dark : colors.surface.light;
+  const textColor = theme === 'dark' ? colors.text.primary.dark : colors.text.primary.light;
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={[styles.container, { backgroundColor: theme === 'dark' ? colors.background.dark : colors.background.light }]}>
+      <StatusBar barStyle={theme === 'dark' ? "light-content" : "dark-content"} />
       <ScrollView contentContainerStyle={styles.scrollContent}>
-        {/* Network Status */}
-        <View style={styles.statusBar}>
-          <View
-            style={[
-              styles.statusIndicator,
-              { backgroundColor: isOnline ? '#4CAF50' : '#FF9800' },
-            ]}
-          />
-          <Text style={styles.statusText}>
-            {isOnline ? 'Online' : 'Offline Mode'}
-          </Text>
+        
+        {/* Header Section */}
+        <View style={styles.header}>
+          <View>
+            <Text style={[styles.greeting, { color: textColor }]}>Good Evening,</Text>
+            <Text style={[styles.greetingTitle, { color: colors.secondary }]}>Counsel</Text>
+          </View>
+          <View style={[styles.statusBadge, { backgroundColor: isOnline ? 'rgba(76, 175, 80, 0.15)' : 'rgba(255, 152, 0, 0.15)' }]}>
+             <View style={[styles.statusDot, { backgroundColor: isOnline ? colors.accent : '#FF9800' }]} />
+             <Text style={[styles.statusText, { color: isOnline ? colors.accent : '#FF9800' }]}>
+               {isOnline ? 'ONLINE' : 'OFFLINE'}
+             </Text>
+          </View>
         </View>
 
-        {/* Case Selector */}
-        <View style={styles.caseSelector}>
-          <Text style={styles.label}>Current Case</Text>
+        {/* Case Dropdown */}
+        <View style={styles.caseSection}>
           <TouchableOpacity
-            style={styles.caseButton}
+            style={[styles.caseSelector, { backgroundColor: boxColor }]}
             onPress={() => setCaseDropdownOpen(!caseDropdownOpen)}
           >
-            <Text style={styles.caseButtonText}>
-              {currentCase?.name || 'Select a case...'}
-            </Text>
-            <Ionicons
-              name={caseDropdownOpen ? 'chevron-up' : 'chevron-down'}
-              size={20}
-              color="#007AFF"
-            />
+             <View>
+               <Text style={[styles.caseLabel, { color: colors.text.secondary.light }]}>Active Case File</Text>
+               <Text style={[styles.caseName, { color: textColor }]}>{currentCase?.name || 'Tap to select case...'}</Text>
+             </View>
+             <Ionicons name="chevron-down" size={20} color={colors.secondary} />
           </TouchableOpacity>
-
-          {/* Case Dropdown Modal */}
-          <Modal
-            visible={caseDropdownOpen}
-            transparent
-            animationType="fade"
-            onRequestClose={() => setCaseDropdownOpen(false)}
-          >
-            <TouchableOpacity
-              style={styles.caseDropdownBackdrop}
-              onPress={() => setCaseDropdownOpen(false)}
-            >
-              <View style={styles.caseDropdown}>
-                <FlatList
-                  data={cases}
-                  renderItem={({ item }) => (
-                    <TouchableOpacity
-                      style={[
-                        styles.caseDropdownItem,
-                        currentCase?.id === item.id &&
-                          styles.caseDropdownItemSelected,
-                      ]}
-                      onPress={() => {
-                        useAppStore.getState().setCurrentCase(item.id);
-                        setCaseDropdownOpen(false);
-                      }}
-                    >
-                      <Text
-                        style={[
-                          styles.caseDropdownItemText,
-                          currentCase?.id === item.id &&
-                            styles.caseDropdownItemTextSelected,
-                        ]}
-                      >
-                        {item.name}
-                      </Text>
-                      {currentCase?.id === item.id && (
-                        <Ionicons
-                          name="checkmark"
-                          size={20}
-                          color="#007AFF"
-                        />
-                      )}
-                    </TouchableOpacity>
-                  )}
-                  keyExtractor={(item) => item.id}
-                  scrollEnabled={false}
-                />
-              </View>
-            </TouchableOpacity>
-          </Modal>
         </View>
 
-        {/* Panic Button */}
-        <View style={styles.buttonContainer}>
-          <TouchableOpacity
-            style={[
-              styles.panicButton,
-              isRecording && styles.panicButtonActive,
-              isProcessing && styles.panicButtonDisabled,
-            ]}
-            onPress={
-              isRecording ? handleStopRecording : handleStartRecording
-            }
-            disabled={isProcessing || !currentCase}
-          >
-            <Ionicons
-              name={isRecording ? 'stop' : 'mic'}
-              size={60}
-              color="white"
-            />
-          </TouchableOpacity>
+        {/* Quick Stats Grid */}
+        <View style={styles.statsGrid}>
+           <View style={[styles.statCard, { backgroundColor: boxColor }]}>
+             <Text style={[styles.statNumber, { color: textColor }]}>{cases.length}</Text>
+             <Text style={styles.statLabel}>Active Cases</Text>
+           </View>
+           <View style={[styles.statCard, { backgroundColor: boxColor }]}>
+             <Text style={[styles.statNumber, { color: textColor }]}>{cases.reduce((acc, c) => acc + c.recordings.length, 0)}</Text>
+             <Text style={styles.statLabel}>Recordings</Text>
+           </View>
+           <View style={[styles.statCard, { backgroundColor: boxColor }]}>
+             <Ionicons name="cloud-done" size={24} color={colors.accent} />
+             <Text style={[styles.statLabel, { marginTop: 4 }]}>Synced</Text>
+           </View>
+        </View>
 
-          {/* Timer */}
-          {isRecording && (
-            <Text style={styles.timer}>{formatTime(recordingTime)}</Text>
-          )}
-
-          {/* Status Text */}
-          <Text style={styles.statusTextLarge}>
-            {isProcessing
-              ? 'Processing...'
-              : isRecording
-              ? 'Recording...'
-              : !currentCase
-              ? 'Select a Case First'
-              : 'Ready to Record'}
+        {/* Recording Area */}
+        <View style={styles.recordContainer}>
+          <View style={[styles.recordRing, isRecording && styles.recordRingActive]}>
+             <TouchableOpacity
+                style={[
+                  styles.recordButton, 
+                  isRecording ? { backgroundColor: colors.destructive } : { backgroundColor: colors.primary },
+                  isProcessing && { opacity: 0.7 }
+                ]}
+                onPress={isRecording ? handleStopRecording : handleStartRecording}
+                disabled={isProcessing || !currentCase}
+             >
+                {isProcessing ? (
+                  <ActivityIndicator size="large" color="white" />
+                ) : (
+                  <Ionicons name={isRecording ? "stop" : "mic"} size={48} color="white" />
+                )}
+             </TouchableOpacity>
+          </View>
+          
+          <Text style={[styles.timerText, { color: isRecording ? colors.destructive : colors.text.secondary.light }]}>
+            {isRecording ? formatTime(recordingTime) : "Tap to Record"}
+          </Text>
+          <Text style={[styles.instructions, { color: colors.text.secondary.light }]}>
+            {isRecording ? "Listening..." : "Analysis will start automatically"}
           </Text>
         </View>
 
-        {/* Results Display */}
+        {/* Results Analysis */}
         {lastAnalysis && (
-          <View style={styles.resultsContainer}>
-            <Text style={styles.resultsTitle}>Analysis Result</Text>
-
-            <View style={styles.resultItem}>
-              <Text style={styles.resultLabel}>Objection:</Text>
-              <Text style={styles.resultValue}>{lastAnalysis.objection}</Text>
+          <View style={[styles.analysisCard, { backgroundColor: boxColor }]}>
+            <View style={styles.cardHeader}>
+               <Ionicons name="flash" size={20} color={colors.secondary} />
+               <Text style={[styles.cardTitle, { color: textColor }]}>Legal Analysis</Text>
             </View>
 
-            <View style={styles.resultItem}>
-              <Text style={styles.resultLabel}>Authority:</Text>
-              <Text style={styles.resultValue}>{lastAnalysis.authority}</Text>
+            {/* Argument Breakdown */}
+            {lastAnalysis.argumentBreakdown && (
+              <View style={styles.analysisRow}>
+                 <Text style={styles.analysisLabel}>ARGUMENT BREAKDOWN</Text>
+                 <Text style={[styles.analysisValue, { color: textColor }]}>{lastAnalysis.argumentBreakdown}</Text>
+              </View>
+            )}
+            
+            <View style={styles.divider} />
+
+            {/* Objection */}
+            <View style={styles.analysisRow}>
+               <Text style={styles.analysisLabel}>OBJECTION</Text>
+               <Text style={[styles.analysisValue, { color: textColor }]}>{lastAnalysis.objection}</Text>
             </View>
 
-            <View style={styles.resultItem}>
-              <Text style={styles.resultLabel}>Your Response:</Text>
-              <Text style={styles.resultValueBold}>
-                {lastAnalysis.oneLiner}
-              </Text>
+            <View style={styles.divider} />
+
+            {/* One-Liner */}
+            <View style={styles.analysisRow}>
+               <Text style={styles.analysisLabel}>ONE-LINER RESPONSE</Text>
+               <Text style={[styles.oneLinerText, { color: colors.destructive }]}>{lastAnalysis.oneLiner}</Text>
             </View>
 
-            <View style={styles.resultItem}>
-              <Text style={styles.resultLabel}>Explanation:</Text>
-              <Text style={styles.resultValue}>{lastAnalysis.explanation}</Text>
-            </View>
+            <View style={styles.divider} />
 
-            <TouchableOpacity style={styles.copyButton}>
-              <Ionicons name="copy" size={18} color="white" />
-              <Text style={styles.copyButtonText}>Copy One-Liner</Text>
-            </TouchableOpacity>
+            {/* Proposed Counter-Argument */}
+            {lastAnalysis.proposedCounterArgument && (
+              <View style={styles.analysisRow}>
+                 <Text style={[styles.analysisLabel, { color: colors.secondary }]}>PROPOSED COUNTER-ARGUMENT</Text>
+                 <Text style={[styles.analysisValue, { color: textColor, lineHeight: 22 }]}>{lastAnalysis.proposedCounterArgument}</Text>
+              </View>
+            )}
+
+            {/* Authorities Section */}
+            {(lastAnalysis.caseLaw?.length > 0 || lastAnalysis.statutoryLaw?.length > 0 || lastAnalysis.constitutionalAuthorities?.length > 0) && (
+              <>
+                <View style={styles.divider} />
+                <Text style={[styles.sectionHeader, { color: colors.secondary }]}>LEGAL AUTHORITIES</Text>
+
+                {lastAnalysis.caseLaw?.length > 0 && (
+                  <View style={styles.authoritySection}>
+                     <Text style={styles.authorityLabel}>Case Law:</Text>
+                     {lastAnalysis.caseLaw.map((item, idx) => (
+                       <Text key={idx} style={[styles.authorityItem, { color: textColor }]}>• {item}</Text>
+                     ))}
+                  </View>
+                )}
+
+                {lastAnalysis.statutoryLaw?.length > 0 && (
+                  <View style={styles.authoritySection}>
+                     <Text style={styles.authorityLabel}>Statutory Law:</Text>
+                     {lastAnalysis.statutoryLaw.map((item, idx) => (
+                       <Text key={idx} style={[styles.authorityItem, { color: textColor }]}>• {item}</Text>
+                     ))}
+                  </View>
+                )}
+
+                {lastAnalysis.constitutionalAuthorities?.length > 0 && (
+                  <View style={styles.authoritySection}>
+                     <Text style={styles.authorityLabel}>Constitutional Authorities:</Text>
+                     {lastAnalysis.constitutionalAuthorities.map((item, idx) => (
+                       <Text key={idx} style={[styles.authorityItem, { color: textColor }]}>• {item}</Text>
+                     ))}
+                  </View>
+                )}
+              </>
+            )}
           </View>
         )}
 
-        {/* Transcript Display */}
-        {lastTranscript && !lastAnalysis && (
-          <View style={styles.transcriptContainer}>
-            <Text style={styles.transcriptTitle}>Transcript</Text>
-            <Text style={styles.transcriptText}>{lastTranscript}</Text>
-          </View>
-        )}
       </ScrollView>
 
-      {/* Recording Name Modal */}
-      <Modal
-        visible={nameModalVisible}
-        transparent
-        animationType="slide"
-        onRequestClose={handleCancelRecording}
-      >
-        <SafeAreaView style={styles.nameModalContainer}>
-          <View style={styles.nameModalContent}>
-            <View style={styles.nameModalHeader}>
-              <Text style={styles.nameModalTitle}>Name Recording</Text>
-              <TouchableOpacity onPress={handleCancelRecording}>
-                <Ionicons name="close" size={24} color="#333" />
-              </TouchableOpacity>
-            </View>
+      {/* Case Dropdown Modal */}
+      <Modal visible={caseDropdownOpen} transparent animationType="fade" onRequestClose={() => setCaseDropdownOpen(false)}>
+        <TouchableOpacity style={styles.modalOverlay} onPress={() => setCaseDropdownOpen(false)}>
+          <View style={[styles.dropdownMenu, { backgroundColor: boxColor }]}>
+            <FlatList
+              data={cases}
+              keyExtractor={(item) => item.id}
+              renderItem={({ item }) => (
+                <TouchableOpacity
+                  style={[styles.dropdownItem, currentCase?.id === item.id && { backgroundColor: theme === 'dark' ? '#3A3A3C' : '#F2F2F7' }]}
+                  onPress={() => {
+                     setCurrentCase(item.id);
+                     setCaseDropdownOpen(false);
+                  }}
+                >
+                  <Text style={[styles.dropdownText, { color: textColor }]}>{item.name}</Text>
+                  {currentCase?.id === item.id && <Ionicons name="checkmark" size={20} color={colors.secondary} />}
+                </TouchableOpacity>
+              )}
+            />
+          </View>
+        </TouchableOpacity>
+      </Modal>
 
-            <Text style={styles.nameModalLabel}>Default name (timestamp):</Text>
-            <View style={styles.defaultNameBox}>
-              <Text style={styles.defaultNameText}>{defaultName}</Text>
-            </View>
+       {/* Name Recording Modal */}
+       <Modal visible={nameModalVisible} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={[styles.nameModal, { backgroundColor: boxColor }]}>
+             <Text style={[styles.modalTitle, { color: textColor }]}>Name Evidence</Text>
+             
+             <View style={[styles.defaultNameBadge, { backgroundColor: 'rgba(0,122,255,0.1)' }]}>
+                <Text style={{ color: colors.secondary, fontWeight: '600' }}>{defaultName}</Text>
+             </View>
 
-            <Text style={styles.nameModalLabel}>Recording name:</Text>
-            <View style={styles.nameInputContainer}>
-              <TextInput
-                style={styles.nameInput}
-                placeholder="Type a custom name or keep default"
-                placeholderTextColor="#999"
+             <TextInput
+                style={[styles.input, { color: textColor, borderColor: colors.border.light }]}
                 value={recordingName}
                 onChangeText={setRecordingName}
-                multiline
-              />
-              <TouchableOpacity
-                style={styles.clearNameButton}
-                onPress={() => setRecordingName('')}
-              >
-                <Ionicons name="close-circle" size={20} color="#999" />
-              </TouchableOpacity>
-            </View>
+                placeholder="Enter custom name..."
+                placeholderTextColor={colors.text.secondary.light}
+             />
 
-            <View style={styles.nameModalButtons}>
-              <TouchableOpacity
-                style={styles.cancelButton}
-                onPress={handleCancelRecording}
-              >
-                <Text style={styles.cancelButtonText}>Discard</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={styles.saveNameButton}
-                onPress={handleSaveRecordingName}
-              >
-                <Ionicons name="checkmark" size={20} color="white" />
-                <Text style={styles.saveNameButtonText}>Save</Text>
-              </TouchableOpacity>
-            </View>
+             <View style={styles.modalActions}>
+                <TouchableOpacity style={styles.modalBtnSecondary} onPress={handleCancelRecording}>
+                   <Text style={{ color: colors.text.secondary.light }}>Discard</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[styles.modalBtnPrimary, { backgroundColor: colors.secondary }]} onPress={handleSaveRecordingName}>
+                   <Text style={{ color: 'white', fontWeight: '600' }}>Save Recording</Text>
+                </TouchableOpacity>
+             </View>
           </View>
-        </SafeAreaView>
+        </View>
       </Modal>
+
     </SafeAreaView>
   );
 }
@@ -494,307 +431,249 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
-  },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  loadingText: {
-    marginTop: 12,
-    fontSize: 16,
-    color: '#666',
   },
   scrollContent: {
-    paddingHorizontal: 20,
-    paddingVertical: 20,
+    padding: 24,
   },
-  statusBar: {
+  header: {
     flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 24,
-    backgroundColor: '#fff',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 8,
-  },
-  statusIndicator: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    marginRight: 8,
-  },
-  statusText: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: '#333',
-  },
-  caseSelector: {
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
     marginBottom: 32,
   },
-  label: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#666',
-    marginBottom: 8,
+  greeting: {
+    fontSize: 16,
+    fontWeight: '400',
   },
-  caseButton: {
+  greetingTitle: {
+    fontSize: 28,
+    fontWeight: '700',
+    letterSpacing: -0.5,
+  },
+  statusBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+    gap: 6,
+  },
+  statusDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  statusText: {
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+  },
+  caseSection: {
+    marginBottom: 24,
+  },
+  caseSelector: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    backgroundColor: '#fff',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#ddd',
+    padding: 16,
+    borderRadius: 16,
+    ...Layout.shadow.small,
   },
-  caseButtonText: {
+  caseLabel: {
+    fontSize: 12,
+    textTransform: 'uppercase',
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  caseName: {
     fontSize: 16,
-    fontWeight: '500',
-    color: '#333',
+    fontWeight: '600',
   },
-  caseDropdownBackdrop: {
+  statsGrid: {
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 40,
+  },
+  statCard: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.3)',
-    justifyContent: 'flex-start',
-    paddingTop: 100,
-  },
-  caseDropdown: {
-    backgroundColor: '#fff',
-    marginHorizontal: 20,
-    borderRadius: 8,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 5,
-    maxHeight: 300,
-  },
-  caseDropdownItem: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
+    padding: 16,
+    borderRadius: 16,
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#eee',
+    justifyContent: 'center',
+    height: 100,
+    ...Layout.shadow.small,
   },
-  caseDropdownItemSelected: {
-    backgroundColor: '#f0f7ff',
+  statNumber: {
+    fontSize: 24,
+    fontWeight: '700',
+    marginBottom: 4,
   },
-  caseDropdownItemText: {
-    fontSize: 16,
-    color: '#333',
+  statLabel: {
+    fontSize: 12,
+    color: '#8E8E93',
   },
-  caseDropdownItemTextSelected: {
-    fontWeight: '600',
-    color: '#007AFF',
-  },
-  buttonContainer: {
+  recordContainer: {
     alignItems: 'center',
     marginBottom: 40,
   },
-  panicButton: {
-    width: 120,
-    height: 120,
-    borderRadius: 60,
-    backgroundColor: '#FF3B30',
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 12,
-    elevation: 8,
-    marginBottom: 20,
-  },
-  panicButtonActive: {
-    backgroundColor: '#CC0000',
+  recordRing: {
     width: 140,
     height: 140,
     borderRadius: 70,
-  },
-  panicButtonDisabled: {
-    opacity: 0.5,
-  },
-  timer: {
-    fontSize: 32,
-    fontWeight: 'bold',
-    color: '#FF3B30',
-    marginBottom: 12,
-  },
-  statusTextLarge: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#333',
-  },
-  resultsContainer: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 20,
-    borderLeftWidth: 4,
-    borderLeftColor: '#4CAF50',
-  },
-  resultsTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#333',
-    marginBottom: 16,
-  },
-  resultItem: {
-    marginBottom: 16,
-  },
-  resultLabel: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#999',
-    textTransform: 'uppercase',
-    marginBottom: 4,
-  },
-  resultValue: {
-    fontSize: 14,
-    color: '#333',
-    lineHeight: 20,
-  },
-  resultValueBold: {
-    fontSize: 14,
-    color: '#FF3B30',
-    fontWeight: '600',
-    lineHeight: 20,
-  },
-  copyButton: {
-    flexDirection: 'row',
-    backgroundColor: '#007AFF',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderRadius: 8,
-    alignItems: 'center',
+    backgroundColor: '#F2F2F7', // Default ring
     justifyContent: 'center',
-    marginTop: 12,
-  },
-  copyButtonText: {
-    color: 'white',
-    fontWeight: '600',
-    marginLeft: 8,
-  },
-  transcriptContainer: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 20,
-  },
-  transcriptTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#333',
-    marginBottom: 12,
-  },
-  transcriptText: {
-    fontSize: 14,
-    color: '#666',
-    lineHeight: 20,
-  },
-  // Name Modal Styles
-  nameModalContainer: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    justifyContent: 'flex-end',
-  },
-  nameModalContent: {
-    backgroundColor: '#fff',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    padding: 20,
-    minHeight: 350,
-  },
-  nameModalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 20,
-  },
-  nameModalTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#333',
-  },
-  nameModalLabel: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#666',
-    textTransform: 'uppercase',
-    marginBottom: 8,
-    marginTop: 12,
-  },
-  defaultNameBox: {
-    backgroundColor: '#f0f7ff',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#007AFF',
-    marginBottom: 16,
-  },
-  defaultNameText: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: '#007AFF',
-  },
-  nameInputContainer: {
-    flexDirection: 'row',
     alignItems: 'center',
     marginBottom: 24,
   },
-  nameInput: {
-    flex: 1,
-    borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-    fontSize: 16,
-    color: '#333',
-    minHeight: 50,
+  recordRingActive: {
+    backgroundColor: 'rgba(255, 59, 48, 0.1)', // Red glow
   },
-  clearNameButton: {
-    position: 'absolute',
-    right: 12,
-    padding: 4,
-  },
-  nameModalButtons: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  cancelButton: {
-    flex: 1,
-    backgroundColor: '#f5f5f5',
-    paddingVertical: 14,
-    borderRadius: 8,
+  recordButton: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#ddd',
+    shadowColor: "#000",
+    shadowOffset: {
+      width: 0,
+      height: 10,
+    },
+    shadowOpacity: 0.3,
+    shadowRadius: 20,
+    elevation: 10,
   },
-  cancelButtonText: {
-    color: '#666',
-    fontWeight: '600',
-    fontSize: 16,
+  timerText: {
+    fontSize: 32,
+    fontWeight: '700',
+    fontVariant: ['tabular-nums'],
+    marginBottom: 8,
   },
-  saveNameButton: {
-    flex: 2,
+  instructions: {
+    fontSize: 14,
+  },
+  analysisCard: {
+    padding: 20,
+    borderRadius: 20,
+    ...Layout.shadow.medium,
+  },
+  cardHeader: {
     flexDirection: 'row',
-    backgroundColor: '#007AFF',
-    paddingVertical: 14,
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 20,
+  },
+  cardTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+  },
+  analysisRow: {
+    marginBottom: 16,
+  },
+  analysisLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#8E8E93',
+    marginBottom: 4,
+    letterSpacing: 1,
+  },
+  analysisValue: {
+    fontSize: 16,
+    lineHeight: 24,
+  },
+  oneLinerText: {
+    fontSize: 18,
+    fontWeight: '600',
+    fontStyle: 'italic',
+  },
+  divider: {
+    height: 1,
+    backgroundColor: '#E5E5EA',
+    marginVertical: 16,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
+  },
+  dropdownMenu: {
+    maxHeight: 300,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: 24,
+  },
+  dropdownItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E5EA',
+  },
+  dropdownText: {
+    fontSize: 16,
+    fontWeight: '500',
+  },
+  nameModal: {
+    padding: 24,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    marginBottom: 16,
+  },
+  defaultNameBadge: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
     borderRadius: 8,
+    marginBottom: 24,
+  },
+  input: {
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 16,
+    fontSize: 16,
+    marginBottom: 32,
+  },
+  modalActions: {
+    flexDirection: 'row',
+    gap: 16,
+    marginBottom: 20,
+  },
+  modalBtnSecondary: {
+    flex: 1,
+    padding: 16,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 8,
   },
-  saveNameButtonText: {
-    color: 'white',
+  modalBtnPrimary: {
+    flex: 2,
+    borderRadius: 16,
+    padding: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sectionHeader: {
+    fontSize: 13,
+    fontWeight: '700',
+    marginBottom: 12,
+    letterSpacing: 1,
+  },
+  authoritySection: {
+    marginBottom: 16,
+  },
+  authorityLabel: {
+    fontSize: 12,
     fontWeight: '600',
-    fontSize: 16,
+    color: '#8E8E93',
+    marginBottom: 6,
+  },
+  authorityItem: {
+    fontSize: 14,
+    lineHeight: 20,
+    marginBottom: 4,
+    paddingLeft: 8,
   },
 });
