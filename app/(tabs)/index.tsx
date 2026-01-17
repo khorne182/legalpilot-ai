@@ -1,5 +1,5 @@
 // app/(tabs)/index.tsx
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -11,6 +11,7 @@ import {
   Alert,
   Modal,
   FlatList,
+  TextInput,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAppStore } from '@/store/useAppStore';
@@ -28,6 +29,12 @@ export default function HomeScreen() {
   const [lastTranscript, setLastTranscript] = useState<string>('');
   const [caseDropdownOpen, setCaseDropdownOpen] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
+  
+  // Name modal state
+  const [nameModalVisible, setNameModalVisible] = useState(false);
+  const [pendingRecording, setPendingRecording] = useState<Recording | null>(null);
+  const [recordingName, setRecordingName] = useState('');
+  const [defaultName, setDefaultName] = useState('');
 
   const isRecording = useAppStore((state) => state.isRecording);
   const isOnline = useAppStore((state) => state.isOnline);
@@ -37,6 +44,21 @@ export default function HomeScreen() {
   const addRecording = useAppStore((state) => state.addRecording);
   const setCurrentCase = useAppStore((state) => state.setCurrentCase);
   const addToQueue = useAppStore((state) => state.addToQueue);
+
+  // Format date/time for default recording name (e.g., "Fri, Jan 17 · 6:45 PM")
+  const formatDateTime = (date: Date) => {
+    const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const day = days[date.getDay()];
+    const month = months[date.getMonth()];
+    const dateNum = date.getDate();
+    let hours = date.getHours();
+    const mins = String(date.getMinutes()).padStart(2, '0');
+    const ampm = hours >= 12 ? 'PM' : 'AM';
+    hours = hours % 12;
+    hours = hours ? hours : 12; // 0 should be 12
+    return `${day}, ${month} ${dateNum} · ${hours}:${mins} ${ampm}`;
+  };
 
   // Initialize app on mount
   useEffect(() => {
@@ -118,6 +140,7 @@ export default function HomeScreen() {
     try {
       // Stop recording and get audio file
       const recordingResult = await audioService.stopRecording();
+      const timestamp = new Date();
 
       // Create recording object
       const recording: Recording = {
@@ -125,35 +148,67 @@ export default function HomeScreen() {
         caseId: currentCase!.id,
         audioUri: recordingResult.uri,
         duration: recordingResult.duration,
-        timestamp: new Date(),
-        rawTranscript: '',
+        timestamp: timestamp,
+        name: '', // Will be set by the name modal
+        rawTranscript: '', // Will be set by Whisper transcription
         analysis: null,
         syncStatus: 'pending',
       };
 
+      // Set default name and show modal
+      const defaultNameStr = formatDateTime(timestamp);
+      setDefaultName(defaultNameStr);
+      setRecordingName(defaultNameStr);
+      setPendingRecording(recording);
+      setIsProcessing(false);
+      setNameModalVisible(true);
+
+    } catch (error) {
+      Alert.alert('Error', 'Failed to stop recording');
+      console.error(error);
+      setIsProcessing(false);
+    }
+  };
+
+  const handleSaveRecordingName = async () => {
+    if (!pendingRecording) return;
+    
+    setNameModalVisible(false);
+    setIsProcessing(true);
+
+    try {
+      // Use the recording name (or default if empty)
+      const finalName = recordingName.trim() || defaultName;
+      const recording = { ...pendingRecording, name: finalName };
+
       // Save to local storage immediately
       await storageService.saveRecording(recording);
 
-      // If online, transcribe and analyze
+      // If online, try to transcribe and analyze
       if (isOnline) {
-        // Transcribe audio
-        const transcript = await transcriptionService.transcribeAudio(
-          recordingResult.uri
-        );
-        recording.rawTranscript = transcript;
-        setLastTranscript(transcript);
-
-        // Try to analyze with legal engine
+        // Try to transcribe audio
         try {
-          const analysis = await legalEngineService.analyzeTranscript(transcript);
-          recording.analysis = analysis;
-          recording.syncStatus = 'synced';
-          setLastAnalysis(analysis);
+          const transcript = await transcriptionService.transcribeAudio(
+            recording.audioUri
+          );
+          // Store the transcript in rawTranscript field
+          recording.rawTranscript = transcript;
+          setLastTranscript(transcript);
+
+          // Try to analyze with legal engine
+          try {
+            const analysis = await legalEngineService.analyzeTranscript(transcript);
+            recording.analysis = analysis;
+            recording.syncStatus = 'synced';
+            setLastAnalysis(analysis);
+          } catch (error) {
+            console.warn('Legal analysis unavailable:', error);
+            recording.syncStatus = 'synced'; // Mark as synced even without analysis
+            setLastAnalysis(null);
+          }
         } catch (error) {
-          console.warn('Legal analysis unavailable:', error);
-          recording.syncStatus = 'synced'; // Mark as synced even without analysis
-          // Show transcript without analysis
-          setLastAnalysis(null);
+          console.warn('Transcription unavailable:', error);
+          recording.syncStatus = 'synced';
         }
       } else {
         // Offline mode: queue for later processing
@@ -172,12 +227,26 @@ export default function HomeScreen() {
       });
 
       addRecording(recording);
+
+      // Reset state
+      setPendingRecording(null);
+      setRecordingName('');
+      setDefaultName('');
     } catch (error) {
-      Alert.alert('Error', 'Failed to process recording');
+      Alert.alert('Error', 'Failed to save recording');
       console.error(error);
     } finally {
       setIsProcessing(false);
     }
+  };
+
+  const handleCancelRecording = () => {
+    // User cancelled - discard the recording
+    setNameModalVisible(false);
+    setPendingRecording(null);
+    setRecordingName('');
+    setDefaultName('');
+    Alert.alert('Recording Discarded', 'The recording was not saved.');
   };
 
   const formatTime = (seconds: number) => {
@@ -359,6 +428,65 @@ export default function HomeScreen() {
           </View>
         )}
       </ScrollView>
+
+      {/* Recording Name Modal */}
+      <Modal
+        visible={nameModalVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={handleCancelRecording}
+      >
+        <SafeAreaView style={styles.nameModalContainer}>
+          <View style={styles.nameModalContent}>
+            <View style={styles.nameModalHeader}>
+              <Text style={styles.nameModalTitle}>Name Recording</Text>
+              <TouchableOpacity onPress={handleCancelRecording}>
+                <Ionicons name="close" size={24} color="#333" />
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.nameModalLabel}>Default name (timestamp):</Text>
+            <View style={styles.defaultNameBox}>
+              <Text style={styles.defaultNameText}>{defaultName}</Text>
+            </View>
+
+            <Text style={styles.nameModalLabel}>Recording name:</Text>
+            <View style={styles.nameInputContainer}>
+              <TextInput
+                style={styles.nameInput}
+                placeholder="Type a custom name or keep default"
+                placeholderTextColor="#999"
+                value={recordingName}
+                onChangeText={setRecordingName}
+                multiline
+              />
+              <TouchableOpacity
+                style={styles.clearNameButton}
+                onPress={() => setRecordingName('')}
+              >
+                <Ionicons name="close-circle" size={20} color="#999" />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.nameModalButtons}>
+              <TouchableOpacity
+                style={styles.cancelButton}
+                onPress={handleCancelRecording}
+              >
+                <Text style={styles.cancelButtonText}>Discard</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.saveNameButton}
+                onPress={handleSaveRecordingName}
+              >
+                <Ionicons name="checkmark" size={20} color="white" />
+                <Text style={styles.saveNameButtonText}>Save</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </SafeAreaView>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -568,5 +696,105 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#666',
     lineHeight: 20,
+  },
+  // Name Modal Styles
+  nameModalContainer: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'flex-end',
+  },
+  nameModalContent: {
+    backgroundColor: '#fff',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    padding: 20,
+    minHeight: 350,
+  },
+  nameModalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  nameModalTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#333',
+  },
+  nameModalLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#666',
+    textTransform: 'uppercase',
+    marginBottom: 8,
+    marginTop: 12,
+  },
+  defaultNameBox: {
+    backgroundColor: '#f0f7ff',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#007AFF',
+    marginBottom: 16,
+  },
+  defaultNameText: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#007AFF',
+  },
+  nameInputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 24,
+  },
+  nameInput: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    fontSize: 16,
+    color: '#333',
+    minHeight: 50,
+  },
+  clearNameButton: {
+    position: 'absolute',
+    right: 12,
+    padding: 4,
+  },
+  nameModalButtons: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  cancelButton: {
+    flex: 1,
+    backgroundColor: '#f5f5f5',
+    paddingVertical: 14,
+    borderRadius: 8,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#ddd',
+  },
+  cancelButtonText: {
+    color: '#666',
+    fontWeight: '600',
+    fontSize: 16,
+  },
+  saveNameButton: {
+    flex: 2,
+    flexDirection: 'row',
+    backgroundColor: '#007AFF',
+    paddingVertical: 14,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  saveNameButtonText: {
+    color: 'white',
+    fontWeight: '600',
+    fontSize: 16,
   },
 });

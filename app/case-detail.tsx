@@ -94,7 +94,7 @@ export default function CaseDetailScreen() {
     const recording = recordings.find((r) => r.id === recordingId);
     if (recording) {
       setRenamingRecordingId(recordingId);
-      setNewName(recording.rawTranscript || formatDateTime(recording.timestamp));
+      setNewName(recording.name || formatDateTime(recording.timestamp));
       setRenameModalVisible(true);
     }
   };
@@ -105,7 +105,7 @@ export default function CaseDetailScreen() {
       return;
     }
 
-    updateRecording(renamingRecordingId, { rawTranscript: newName });
+    updateRecording(renamingRecordingId, { name: newName });
     setRenameModalVisible(false);
     setRenamingRecordingId(null);
     setNewName('');
@@ -128,7 +128,7 @@ export default function CaseDetailScreen() {
           <View style={styles.recordingInfo}>
             <Text style={styles.recordingDateTime}>{defaultName}</Text>
             <Text style={styles.recordingName}>
-              {item.rawTranscript || 'Unnamed Recording'}
+              {item.name || 'Unnamed Recording'}
             </Text>
             <Text style={styles.recordingDuration}>{item.duration}s</Text>
           </View>
@@ -156,7 +156,15 @@ export default function CaseDetailScreen() {
               </Text>
             </TouchableOpacity>
 
-            {/* Transcript */}
+            {/* Transcript from Whisper */}
+            {item.rawTranscript && (
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>Transcript</Text>
+                <Text style={styles.transcriptText}>{item.rawTranscript}</Text>
+              </View>
+            )}
+
+            {/* One-liner Response */}
             {item.analysis?.oneLiner && (
               <View style={styles.section}>
                 <Text style={styles.sectionTitle}>Your Response</Text>
@@ -385,6 +393,16 @@ const styles = StyleSheet.create({
     color: '#FF3B30',
     fontWeight: '600',
     lineHeight: 20,
+  },
+  transcriptText: {
+    fontSize: 14,
+    color: '#333',
+    lineHeight: 22,
+    backgroundColor: '#f9f9f9',
+    padding: 12,
+    borderRadius: 8,
+    borderLeftWidth: 3,
+    borderLeftColor: '#007AFF',
   },
   analysisItem: {
     gap: 4,

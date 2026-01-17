@@ -13,7 +13,8 @@ export interface Recording {
   audioUri: string;                    // Local file path
   duration: number;                    // seconds
   timestamp: Date;
-  rawTranscript: string;               // What Whisper returned
+  name: string;                        // User-defined recording name
+  rawTranscript: string;               // What Whisper returned (actual audio transcript)
   analysis: LegalAnalysis | null;      // What GPT-4o returned
   syncStatus: 'pending' | 'synced' | 'failed';
 }
