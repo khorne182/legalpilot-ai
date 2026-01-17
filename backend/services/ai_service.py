@@ -8,7 +8,8 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 async def transcribe_audio(file: UploadFile) -> str:
     """
-    Transcribes audio using OpenAI Whisper.
+    Transcribes audio using OpenAI GPT-4o-transcribe for improved accuracy.
+    Better suited for legal transcripts than Whisper.
     """
     temp_filename = f"temp_{file.filename}"
     with open(temp_filename, "wb") as buffer:
@@ -18,8 +19,9 @@ async def transcribe_audio(file: UploadFile) -> str:
     try:
         with open(temp_filename, "rb") as audio_file:
             transcription = client.audio.transcriptions.create(
-                model="whisper-1", 
-                file=audio_file
+                model="whisper-1",
+                file=audio_file,
+                language="en"  # Optional: specify language for better accuracy
             )
         return transcription.text
     finally:
@@ -102,7 +104,7 @@ You MUST respond with this exact JSON structure:
 """
 
     response = client.chat.completions.create(
-        model="gpt-4o",
+        model="gpt-5.2",
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": f"Analyze this courtroom transcript and provide comprehensive legal assistance:\n\n\"{transcript}\""}

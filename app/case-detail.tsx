@@ -5,28 +5,35 @@ import {
   Text,
   TouchableOpacity,
   StyleSheet,
-  SafeAreaView,
+  // SafeAreaView, // Replaced with View + insets
   FlatList,
   Alert,
   Modal,
   TextInput,
   useColorScheme,
   StatusBar,
+  ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useAppStore } from '@/store/useAppStore';
 import { audioService } from '@/services/audioService';
+import { useRef } from 'react';
 import { Colors, Layout } from '@/theme';
+import { apiService } from '@/services/apiService';
+import { Platform } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export default function CaseDetailScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets(); // Get safe area insets
   const { caseId } = useLocalSearchParams<{ caseId: string }>();
   const [isPlaying, setIsPlaying] = useState<string | null>(null);
   const [selectedRecording, setSelectedRecording] = useState<string | null>(null);
   const [renameModalVisible, setRenameModalVisible] = useState(false);
   const [renamingRecordingId, setRenamingRecordingId] = useState<string | null>(null);
   const [newName, setNewName] = useState('');
+  const [analyzingIds, setAnalyzingIds] = useState<Set<string>>(new Set());
 
   const colorScheme = useColorScheme();
   const theme = colorScheme === 'dark' ? 'dark' : 'light';
@@ -37,12 +44,41 @@ export default function CaseDetailScreen() {
   const deleteRecording = useAppStore((state) => state.deleteRecording);
   const updateRecording = useAppStore((state) => state.updateRecording);
 
+  const handleAnalyze = async (recording: any) => {
+    try {
+      setAnalyzingIds(prev => new Set(prev).add(recording.id));
+      
+      const result = await apiService.analyzeAudio(recording.audioUri);
+      
+      updateRecording(recording.id, {
+        rawTranscript: result.transcript,
+        analysis: result.analysis,
+        syncStatus: 'synced'
+      });
+      
+      Alert.alert('Success', 'Analysis complete');
+    } catch (error) {
+      Alert.alert('Error', 'Analysis failed. Please try again.');
+    } finally {
+      setAnalyzingIds(prev => {
+        const next = new Set(prev);
+        next.delete(recording.id);
+        return next;
+      });
+    }
+  };
+
   const caseData = cases.find((c) => c.id === caseId);
   const caseRecordings = recordings.filter((r) => r.caseId === caseId);
 
   if (!caseData) {
     return (
-      <SafeAreaView style={[styles.container, { backgroundColor: theme === 'dark' ? colors.background.dark : colors.background.light }]}>
+      <View style={[styles.container, { backgroundColor: theme === 'dark' ? colors.background.dark : colors.background.light, paddingTop: insets.top }]}>
+        <StatusBar 
+          barStyle={theme === 'dark' ? "light-content" : "dark-content"} 
+          backgroundColor="transparent"
+          translucent
+        />
         <View style={styles.header}>
           <TouchableOpacity onPress={() => router.back()}>
             <Ionicons name="chevron-back" size={24} color={colors.secondary} />
@@ -50,7 +86,7 @@ export default function CaseDetailScreen() {
           <Text style={[styles.headerTitle, { color: theme === 'dark' ? colors.text.primary.dark : colors.text.primary.light }]}>Case Not Found</Text>
           <View style={{ width: 24 }} />
         </View>
-      </SafeAreaView>
+      </View>
     );
   }
 
@@ -178,7 +214,7 @@ export default function CaseDetailScreen() {
               </View>
             )}
 
-            {item.analysis && (
+            {item.analysis ? (
                <View style={styles.section}>
                   <Text style={styles.sectionTitle}>LEGAL ANALYSIS</Text>
                   
@@ -255,6 +291,23 @@ export default function CaseDetailScreen() {
                      )}
                   </View>
                </View>
+            ) : (
+              <View style={styles.section}>
+                <TouchableOpacity 
+                   style={[styles.playButton, { backgroundColor: colors.primary, justifyContent: 'center', marginTop: 10 }]}
+                   onPress={() => handleAnalyze(item)}
+                   disabled={analyzingIds.has(item.id)}
+                >
+                   {analyzingIds.has(item.id) ? (
+                     <ActivityIndicator size="small" color="white" />
+                   ) : (
+                     <>
+                        <Ionicons name="flash" size={18} color="white" />
+                        <Text style={styles.playButtonText}>Analyze Audio</Text>
+                     </>
+                   )}
+                </TouchableOpacity>
+              </View>
             )}
           </View>
         )}
@@ -267,12 +320,16 @@ export default function CaseDetailScreen() {
   const textColor = theme === 'dark' ? colors.text.primary.dark : colors.text.primary.light;
 
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: bgColor }]}>
-      <StatusBar barStyle={theme === 'dark' ? "light-content" : "dark-content"} />
+    <View style={[styles.container, { backgroundColor: bgColor, paddingTop: insets.top }]}>
+      <StatusBar 
+        barStyle={theme === 'dark' ? "light-content" : "dark-content"} 
+        backgroundColor="transparent"
+        translucent
+      />
       
       <View style={[styles.header, { backgroundColor: surfaceColor, borderBottomColor: theme === 'dark' ? colors.border.dark : colors.border.light }]}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-          <Ionicons name="arrow-back" size={24} color={colors.text.primary.light} />
+          <Ionicons name="arrow-back" size={24} color={textColor} />
         </TouchableOpacity>
         <Text style={[styles.headerTitle, { color: textColor }]}>{caseData.name}</Text>
         <View style={{ width: 40 }} /> 
@@ -319,7 +376,7 @@ export default function CaseDetailScreen() {
            </View>
         </View>
       </Modal>
-    </SafeAreaView>
+    </View>
   );
 }
 

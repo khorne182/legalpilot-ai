@@ -14,8 +14,11 @@ import {
   TextInput,
   useColorScheme,
   StatusBar,
+  Platform,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
 import { useAppStore } from '@/store/useAppStore';
 import { audioService } from '@/services/audioService';
 import { apiService } from '@/services/apiService';
@@ -27,6 +30,8 @@ export default function HomeScreen() {
   const colorScheme = useColorScheme();
   const theme = colorScheme === 'dark' ? 'dark' : 'light';
   const colors = Colors; // Access colors directly
+  const router = useRouter();
+  const insets = useSafeAreaInsets();
 
   const [recordingTime, setRecordingTime] = useState(0);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -213,12 +218,16 @@ export default function HomeScreen() {
   const textColor = theme === 'dark' ? colors.text.primary.dark : colors.text.primary.light;
 
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: theme === 'dark' ? colors.background.dark : colors.background.light }]}>
-      <StatusBar barStyle={theme === 'dark' ? "light-content" : "dark-content"} />
+    <View style={[styles.container, { backgroundColor: theme === 'dark' ? colors.background.dark : colors.background.light }]}>
+      <StatusBar 
+        barStyle={theme === 'dark' ? "light-content" : "dark-content"} 
+        backgroundColor="transparent"
+        translucent
+      />
       <ScrollView contentContainerStyle={styles.scrollContent}>
         
         {/* Header Section */}
-        <View style={styles.header}>
+        <View style={[styles.header, { paddingTop: insets.top + (Platform.OS === 'android' ? 20 : 0) }]}>
           <View>
             <Text style={[styles.greeting, { color: textColor }]}>Good Evening,</Text>
             <Text style={[styles.greetingTitle, { color: colors.secondary }]}>Counsel</Text>
@@ -247,10 +256,13 @@ export default function HomeScreen() {
 
         {/* Quick Stats Grid */}
         <View style={styles.statsGrid}>
-           <View style={[styles.statCard, { backgroundColor: boxColor }]}>
+           <TouchableOpacity 
+             style={[styles.statCard, { backgroundColor: boxColor }]}
+             onPress={() => router.push('/(tabs)/cases')}
+           >
              <Text style={[styles.statNumber, { color: textColor }]}>{cases.length}</Text>
              <Text style={styles.statLabel}>Active Cases</Text>
-           </View>
+           </TouchableOpacity>
            <View style={[styles.statCard, { backgroundColor: boxColor }]}>
              <Text style={[styles.statNumber, { color: textColor }]}>{cases.reduce((acc, c) => acc + c.recordings.length, 0)}</Text>
              <Text style={styles.statLabel}>Recordings</Text>
@@ -423,8 +435,7 @@ export default function HomeScreen() {
           </View>
         </View>
       </Modal>
-
-    </SafeAreaView>
+    </View>
   );
 }
 

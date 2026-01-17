@@ -14,6 +14,7 @@ import {
   useColorScheme,
   StatusBar,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
@@ -25,6 +26,7 @@ export default function CasesScreen() {
   const [modalVisible, setModalVisible] = useState(false);
   const [newCaseName, setNewCaseName] = useState('');
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const colorScheme = useColorScheme();
   const theme = colorScheme === 'dark' ? 'dark' : 'light';
   const colors = Colors;
@@ -121,10 +123,18 @@ export default function CasesScreen() {
   const surfaceColor = theme === 'dark' ? colors.surface.dark : colors.surface.light;
 
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: bgColor }]}>
-      <StatusBar barStyle={theme === 'dark' ? "light-content" : "dark-content"} />
+    <View style={[styles.container, { backgroundColor: bgColor }]}>
+      <StatusBar 
+        barStyle={theme === 'dark' ? "light-content" : "dark-content"} 
+        backgroundColor="transparent"
+        translucent
+      />
       
-      <View style={[styles.header, { backgroundColor: surfaceColor, borderBottomColor: theme === 'dark' ? colors.border.dark : colors.border.light }]}>
+      <View style={[styles.header, { 
+        backgroundColor: surfaceColor, 
+        borderBottomColor: theme === 'dark' ? colors.border.dark : colors.border.light,
+        paddingTop: insets.top + 16 
+      }]}>
         <Text style={[styles.headerTitle, { color: textColor }]}>Case Files</Text>
         <TouchableOpacity style={styles.createButton} onPress={() => setModalVisible(true)}>
           <Ionicons name="add" size={28} color={colors.secondary} />
@@ -180,7 +190,7 @@ export default function CasesScreen() {
           </View>
         </View>
       </Modal>
-    </SafeAreaView>
+    </View>
   );
 }
 
